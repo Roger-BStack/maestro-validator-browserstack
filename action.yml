@@ -1,0 +1,60 @@
+name: "Maestro CI Validator"
+description: "Pre-flight validation for BrowserStack Maestro test suites. Catches upload, build-API, and pre-execution scan errors before running in a BrowserStack session."
+author: "Roger Jefferies"
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  zip:
+    description: "Path to the test suite zip file"
+    required: true
+  params:
+    description: "Path to JSON file containing build parameters (execute, tags, env, shards, config)"
+    required: false
+    default: ""
+  fail-on-warnings:
+    description: "Fail the step if warnings are present (default: false)"
+    required: false
+    default: "false"
+  node-version:
+    description: "Node.js version to use"
+    required: false
+    default: "20"
+
+outputs:
+  valid:
+    description: "true if validation passed, false otherwise"
+    value: ${{ steps.validate.outputs.valid }}
+  error-count:
+    description: "Total number of errors across all phases"
+    value: ${{ steps.validate.outputs.error-count }}
+  warning-count:
+    description: "Total number of warnings across all phases"
+    value: ${{ steps.validate.outputs.warning-count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm install --omit=dev --no-audit --no-fund
+
+    - name: Run Maestro validation
+      id: validate
+      shell: bash
+      run: |
+        ARGS="${{ inputs.zip }}"
+        if [ -n "${{ inputs.params }}" ]; then
+          ARGS="$ARGS --params ${{ inputs.params }}"
+        fi
+        if [ "${{ inputs.fail-on-warnings }}" = "true" ]; then
+          ARGS="$ARGS --fail-on-warnings"
+        fi
+        node "${{ github.action_path }}/bin/maestro-validate.js" $ARGS

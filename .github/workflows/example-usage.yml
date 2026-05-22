@@ -1,0 +1,60 @@
+name: BrowserStack Maestro Test Suite Validation
+
+on:
+  # pull_request:
+  #   paths:
+  #     - "tests/maestro/**"
+  #     - "build-params.json"
+  # push:
+  #   branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate-maestro-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bundle test suite into zip
+        run: |
+          cd tests/maestro
+          zip -r ../../test-suite.zip flows/
+
+      - name: Validate Maestro test suite
+        id: maestro-validate
+        uses: Roger-BStack/maestro-validator-browserstack@main
+        with:
+          zip: ./test-suite.zip
+          params: ./build-params.json
+          fail-on-warnings: false
+
+      - name: Upload to BrowserStack
+        if: steps.maestro-validate.outputs.valid == 'true' && github.ref == 'refs/heads/main'
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+        run: |
+          curl -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+            -X POST "https://api-cloud.browserstack.com/app-automate/maestro/v2/test-suite" \
+            -F "file=@./test-suite.zip"
+
+      - name: Comment validation summary on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const valid = '${{ steps.maestro-validate.outputs.valid }}' === 'true';
+            const errors = '${{ steps.maestro-validate.outputs.error-count }}';
+            const warnings = '${{ steps.maestro-validate.outputs.warning-count }}';
+            const body =
+              `## 🧪 Maestro Validation\n\n` +
+              `**Result:** ${valid ? '✅ Valid' : '❌ Invalid'}\n` +
+              `**Errors:** ${errors} | **Warnings:** ${warnings}\n\n` +
+              `See the workflow summary for full details.`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.name,
+              body
+            });

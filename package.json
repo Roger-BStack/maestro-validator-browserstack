@@ -1,0 +1,35 @@
+{
+  "name": "maestro-validator-browserstack",
+  "version": "1.0.0",
+  "description": "Pre-flight validator for BrowserStack Maestro test suites. Catches upload, build-API, and pre-execution scan errors before running a BrowserStack session.",
+  "main": "src/validator.js",
+  "bin": {
+    "maestro-validate": "./bin/maestro-validate.js"
+  },
+  "scripts": {
+    "test": "node bin/maestro-validate.js --help",
+    "validate": "node bin/maestro-validate.js"
+  },
+  "keywords": [
+    "browserstack",
+    "maestro",
+    "mobile-testing",
+    "ci",
+    "github-actions",
+    "bitbucket-pipelines",
+    "validation"
+  ],
+  "author": "Roger Jefferies",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "js-yaml": "^4.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Roger-BStack/maestro-validator-browserstack.git"
+  }
+}

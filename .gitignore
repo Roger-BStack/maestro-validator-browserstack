@@ -1,0 +1,14 @@
+node_modules/
+*.log
+npm-debug.log*
+.DS_Store
+.env
+.env.local
+coverage/
+*.zip
+maestro-validation-report.json
+.idea/
+.vscode/
+*.swp
+*.swo
+output/

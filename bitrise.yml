@@ -1,0 +1,73 @@
+format_version: "13"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+
+app:
+  envs:
+    - TEST_SUITE_ZIP: ./test-suite.zip
+    - BUILD_PARAMS: ./build-params.json
+
+workflows:
+
+  validate-maestro:
+    title: "🧪 Validate Maestro Test Suite"
+    description: "Pre-flight validation for BrowserStack Maestro test suites."
+    steps:
+      - activate-ssh-key@4: {}
+      - git-clone@8: {}
+      - nvm@1:
+          inputs:
+            - node_version: "20"
+      - script@1:
+          title: Install dependencies
+          inputs:
+            - content: |
+                #!/usr/bin/env bash
+                set -euo pipefail
+                npm install --omit=dev --no-audit --no-fund
+      - script@1:
+          title: Run Maestro validation
+          inputs:
+            - content: |
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                ARGS="$TEST_SUITE_ZIP"
+
+                if [ -n "${BUILD_PARAMS:-}" ] && [ -f "$BUILD_PARAMS" ]; then
+                  ARGS="$ARGS --params $BUILD_PARAMS"
+                fi
+
+                if [ "${FAIL_ON_WARNINGS:-false}" = "true" ]; then
+                  ARGS="$ARGS --fail-on-warnings"
+                fi
+
+                node bin/maestro-validate.js $ARGS
+      - deploy-to-bitrise-io@2:
+          title: Upload validation report
+          inputs:
+            - deploy_path: maestro-validation-report.json
+            - is_compress: "false"
+
+  upload-to-browserstack:
+    title: "🚀 Upload to BrowserStack"
+    description: "Upload validated Maestro test suite to BrowserStack."
+    steps:
+      - activate-ssh-key@4: {}
+      - git-clone@8: {}
+      - script@1:
+          title: Upload test suite to BrowserStack
+          inputs:
+            - content: |
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                curl -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+                  -X POST "https://api-cloud.browserstack.com/app-automate/maestro/v2/test-suite" \
+                  -F "file=@$TEST_SUITE_ZIP"
+
+  validate-and-upload:
+    title: "✅ Validate and Upload to BrowserStack"
+    description: "Validate Maestro test suite then upload to BrowserStack."
+    after_run:
+      - validate-maestro
+      - upload-to-browserstack

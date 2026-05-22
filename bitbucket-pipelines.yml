@@ -1,0 +1,38 @@
+image: node:20
+
+definitions:
+  steps:
+    - step: &validate-maestro
+        name: "🧪 Validate Maestro Test Suite"
+        caches:
+          - node
+        script:
+          - npm install --omit=dev --no-audit --no-fund
+          - npm pack ./maestro-ci-validator || true
+          - node maestro-ci-validator/bin/maestro-validate.js
+              ./test-suite.zip
+              --params ./build-params.json
+        artifacts:
+          - maestro-validation-report.json
+
+    - step: &upload-to-browserstack
+        name: "🚀 Upload to BrowserStack"
+        script:
+          - |
+            curl -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+              -X POST "https://api-cloud.browserstack.com/app-automate/maestro/v2/test-suite" \
+              -F "file=@./test-suite.zip"
+
+pipelines:
+  pull-requests:
+    "**":
+      - step: *validate-maestro
+
+  branches:
+    main:
+      - step: *validate-maestro
+      - step: *upload-to-browserstack
+
+  custom:
+    validate-only:
+      - step: *validate-maestro
