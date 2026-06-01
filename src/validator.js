@@ -25,8 +25,8 @@ const IGNORED_FILES = new Set([
 const MAX_ZIP_SIZE_BYTES = 1 * 1024 * 1024 * 1024;        // 1 GB
 const MAX_UNARCHIVED_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const MAX_FILENAME_LENGTH = 255;
-const ALLOWED_FILENAME_CHARS = /^[a-zA-Z0-9._\-\s\[\]/]+$/;
-const ALLOWED_EXECUTE_CHARS = /^[a-zA-Z0-9._\-#]+$/;
+const ALLOWED_FILENAME_CHARS = /^[a-zA-Z0-9._\-\s\[\]/,\{\}\(\)]+$/;
+const ALLOWED_EXECUTE_CHARS = /^[a-zA-Z0-9._\-\s\[\]/,\{\}\(\)#]+$/;
 const MAX_ENV_KEY_LENGTH = 30;
 const MAX_ENV_VALUE_LENGTH = 100;
 const DRY_RUN_TIMEOUT_MS = 120_000;
@@ -519,9 +519,109 @@ async function simulateDryRun(zipBuffer, options = {}) {
  * @param {string} dirPath  Absolute path to the directory
  * @returns {Promise<Buffer>}
  */
-async function directoryToZipBuffer(dirPath) {
+/**
+ * If renameDotPrefixed is true, replace a single leading period in a file/folder
+ * name segment with an underscore (e.g. ".hidden" → "_hidden").
+ * A segment that is exactly "." or ".." is left unchanged.
+ */
+function applyDotRename(segment) {
+  if (segment.startsWith(".") && segment !== "." && segment !== "..") {
+    return "_" + segment.slice(1);
+  }
+  return segment;
+}
+
+/**
+ * Rename all dot-prefixed path segments in a zip entry path.
+ * e.g. ".hidden/foo/.bar.yaml" → "_hidden/foo/_bar.yaml"
+ */
+function renameDotPrefixedPath(entryPath) {
+  return entryPath.split("/").map(applyDotRename).join("/");
+}
+
+/**
+ * For every .js, .yml, and .yaml file in the zip, replace occurrences of
+ * each renamed path (from → to) in the file's text content.
+ * Only renames where from !== to are processed.
+ *
+ * In addition to full zip-path renames, this also substitutes individual
+ * renamed path segments so that relative references (e.g. ".hidden/flow.yaml"
+ * or just ".bar.yaml") inside file content are updated to use the new names.
+ *
+ * Returns a list of { file, from, to } objects for every substitution made.
+ *
+ * @param {JSZip} zip
+ * @param {Array<{from: string, to: string}>} renames
+ * @returns {Promise<Array<{file: string, from: string, to: string}>>}
+ */
+async function applyRenamesInTextFiles(zip, renames) {
+  const TEXT_EXTENSIONS = /\.(js|ya?ml)$/i;
+  const refUpdates = [];
+
+  // Only process renames where the path actually changed.
+  const effectiveRenames = renames.filter((r) => r.from !== r.to);
+  if (effectiveRenames.length === 0) return refUpdates;
+
+  // Expand renames to also include segment-level substitutions.
+  // For a full-path rename like "root/.hidden/foo.yaml" → "root/_hidden/foo.yaml",
+  // we also add the segment pair ".hidden" → "_hidden" so that relative references
+  // inside file content (e.g. runFlow: .hidden/flow.yaml) are caught too.
+  // Use a Map keyed on `from` to deduplicate.
+  const allRenamesMap = new Map();
+  for (const { from, to } of effectiveRenames) {
+    allRenamesMap.set(from, to);
+    // Derive segment-level pairs from each path component.
+    const fromSegs = from.split("/");
+    const toSegs = to.split("/");
+    for (let i = 0; i < fromSegs.length; i++) {
+      const segFrom = fromSegs[i];
+      const segTo = toSegs[i] !== undefined ? toSegs[i] : segFrom;
+      if (segFrom !== segTo && !allRenamesMap.has(segFrom)) {
+        allRenamesMap.set(segFrom, segTo);
+      }
+    }
+  }
+
+  // Build a sorted list (longest `from` first) to avoid partial replacements.
+  const sorted = [...allRenamesMap.entries()]
+    .map(([from, to]) => ({ from, to }))
+    .sort((a, b) => b.from.length - a.from.length);
+
+  for (const [entryName, entry] of Object.entries(zip.files)) {
+    if (entry.dir) continue;
+    if (!TEXT_EXTENSIONS.test(entryName)) continue;
+
+    let content = await entry.async("string");
+    let changed = false;
+
+    for (const { from, to } of sorted) {
+      // Match the path as a substring (handles both full paths and relative refs).
+      // Use a global replace so all occurrences in the file are updated.
+      if (content.includes(from)) {
+        content = content.split(from).join(to);
+        refUpdates.push({ file: entryName, from, to });
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      zip.file(entryName, content);
+    }
+  }
+
+  return refUpdates;
+}
+
+async function directoryToZipBuffer(dirPath, options = {}) {
+  const { renameDotPrefixed = false } = options;
   const zip = new JSZip();
-  const rootName = path.basename(dirPath);
+  const renames = []; // { from, to } pairs for reporting
+
+  const origRootName = path.basename(dirPath);
+  const rootName = renameDotPrefixed ? applyDotRename(origRootName) : origRootName;
+  if (renameDotPrefixed && rootName !== origRootName) {
+    renames.push({ from: origRootName, to: rootName });
+  }
 
   function addDir(fsPath, zipPath) {
     const entries = fs.readdirSync(fsPath, { withFileTypes: true });
@@ -529,8 +629,14 @@ async function directoryToZipBuffer(dirPath) {
       // Skip files in IGNORED_FILES, that must not appear in the zip.
       if(IGNORED_FILES.has(entry.name)) continue;
 
+      const entryName = renameDotPrefixed ? applyDotRename(entry.name) : entry.name;
+      if (renameDotPrefixed && entryName !== entry.name) {
+        const fromPath = zipPath ? `${zipPath}/${entry.name}` : entry.name;
+        const toPath   = zipPath ? `${zipPath}/${entryName}` : entryName;
+        renames.push({ from: fromPath, to: toPath });
+      }
       const fullPath = path.join(fsPath, entry.name);
-      const entryZipPath = zipPath ? `${zipPath}/${entry.name}` : entry.name;
+      const entryZipPath = zipPath ? `${zipPath}/${entryName}` : entryName;
       if (entry.isDirectory()) {
         zip.folder(entryZipPath);
         addDir(fullPath, entryZipPath);
@@ -542,7 +648,12 @@ async function directoryToZipBuffer(dirPath) {
   }
 
   addDir(dirPath, rootName);
-  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+
+  // Update path references inside .js/.yml/.yaml files to use renamed paths.
+  const refUpdates = await applyRenamesInTextFiles(zip, renames);
+
+  const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  return { buffer, renames, refUpdates };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -577,8 +688,41 @@ function extractClassname(filepath) {
 // MAIN PIPELINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function validateTestSuite(zipBuffer, zipFilename, buildParams = {}) {
-  const uploadResult = await validateUpload(zipBuffer, zipFilename);
+async function validateTestSuite(zipBuffer, zipFilename, buildParams = {}, options = {}) {
+  const { renameDotPrefixed = false } = options;
+
+  // If renameDotPrefixed is requested and the input is a zip buffer (already built),
+  // rewrite the zip in-memory so all dot-prefixed entry names are renamed before validation.
+  let effectiveBuffer = zipBuffer;
+  const renames = []; // { from, to } pairs collected during rename
+  if (renameDotPrefixed) {
+    try {
+      const srcZip = await JSZip.loadAsync(zipBuffer);
+      const newZip = new JSZip();
+      for (const [name, entry] of Object.entries(srcZip.files)) {
+        const newName = renameDotPrefixedPath(name);
+        if (newName !== name) {
+          renames.push({ from: name, to: newName });
+        }
+        if (entry.dir) {
+          newZip.folder(newName);
+        } else {
+          const content = await entry.async("nodebuffer");
+          newZip.file(newName, content);
+        }
+      }
+
+      // Update path references inside .js/.yml/.yaml files to use renamed paths.
+      const refUpdates = await applyRenamesInTextFiles(newZip, renames);
+      options._refUpdates = refUpdates;
+
+      effectiveBuffer = await newZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+    } catch (e) {
+      // If we can't rewrite, fall through — validateUpload will catch the parse error.
+    }
+  }
+
+  const uploadResult = await validateUpload(effectiveBuffer, zipFilename);
   const buildResult = validateBuildParams(buildParams);
 
   // Only run dry-run if the zip was parseable (upload parse failure returns early
@@ -588,7 +732,7 @@ async function validateTestSuite(zipBuffer, zipFilename, buildParams = {}) {
   );
   const dryRunResult = zipParseFailed
     ? null
-    : await simulateDryRun(zipBuffer, {
+    : await simulateDryRun(effectiveBuffer, {
         execute: buildParams.execute,
         rootFolder: buildParams.rootFolder,
       });
@@ -601,6 +745,8 @@ async function validateTestSuite(zipBuffer, zipFilename, buildParams = {}) {
       uploadResult.isValid &&
       buildResult.isValid &&
       (dryRunResult ? dryRunResult.isValid : true),
+    renames,
+    refUpdates: options._refUpdates || [],
   };
 }
 
@@ -611,4 +757,5 @@ module.exports = {
   validateTestSuite,
   directoryToZipBuffer,
   ValidationResult,
+  renameDotPrefixedPath,
 };

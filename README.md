@@ -46,6 +46,7 @@ maestro-validate <zip-file|directory> [options]
 | `--output-dir <path>` | Directory for saving output files such as zip archives (default: `./output`) |
 | `--fail-on-warnings` | Exit with code `1` if any warnings are present, even when there are no errors |
 | `--save-zip-file` | When a directory is given and validation passes, save the in-memory zip to `<output-dir>/<dirname>.zip` |
+| `--rename-dot-prefixed` | Rename any file or folder whose name starts with a single `.` by replacing the leading `.` with `_` (e.g. `.hidden` → `_hidden`, `.env` → `_env`). Applied when creating, loading, or saving the zip. Useful when your source tree contains dot-prefixed names that would otherwise trigger the `HIDDEN_DIRECTORY` validation error. |
 | `--help`, `-h` | Print help and exit |
 
 ---
@@ -92,6 +93,21 @@ node bin/maestro-validate.js ./test-suite-root-directory --fail-on-warnings
 node bin/maestro-validate.js ./test-suite.zip --params build.json --format json --fail-on-warnings
 ```
 
+### Rename dot-prefixed files and folders when validating a directory
+```bash
+node bin/maestro-validate.js ./my-test-suite/ --rename-dot-prefixed
+```
+
+### Rename dot-prefixed names and save the resulting zip
+```bash
+node bin/maestro-validate.js ./my-test-suite/ --rename-dot-prefixed --save-zip-file
+```
+
+### Rename dot-prefixed names in an existing zip file
+```bash
+node bin/maestro-validate.js ./test-suite.zip --rename-dot-prefixed
+```
+
 ---
 
 ## --format option
@@ -129,6 +145,54 @@ When `--format json` is used, the validator writes a single JSON object to stdou
 ```
 
 This is useful for piping results into other tools or storing them as CI artifacts.
+
+---
+
+## --rename-dot-prefixed option
+
+BrowserStack's upload validator rejects any file or folder whose name begins with a `.` (dot), reporting a `HIDDEN_DIRECTORY` error. This is common when a source tree contains files such as `.env`, `.flowconfig`, or folders like `.github`.
+
+The `--rename-dot-prefixed` flag tells the validator to automatically rename these entries by replacing the single leading `.` with `_` before any validation or zip-saving takes place:
+
+| Original name | Renamed to |
+|---|---|
+| `.hidden` | `_hidden` |
+| `.env` | `_env` |
+| `.flowconfig` | `_flowconfig` |
+| `.github/` | `_github/` |
+
+### How it works
+
+- **Directory input**: dot-prefixed file and folder names are renamed _in-memory_ while the zip is being created. The files on disk are **not** modified.
+- **Zip file input**: the zip is rewritten in-memory with all dot-prefixed entry path segments renamed before validation runs.
+- **Reference rewriting**: after renaming, every `.js`, `.yml`, and `.yaml` file inside the zip is scanned for occurrences of the original (dot-prefixed) paths. Any found references are updated to use the renamed (underscore-prefixed) path, so `runFlow`, `config`, and other path references remain valid.
+- **`--save-zip-file`**: when combined with `--rename-dot-prefixed`, the saved zip contains both the renamed entries and the updated references.
+
+### Console output
+
+For each rename and each reference update, a message is printed to stderr:
+
+```
+🔤  Renamed: ".hidden/login.yaml" → "_hidden/login.yaml"
+📝  Updated reference in "flows/main.yaml": ".hidden/login.yaml" → "_hidden/login.yaml"
+```
+
+### Scope
+
+Only a **single leading period** is replaced. Names that are exactly `.` or `..` are left unchanged. All other characters in the name are preserved. Reference rewriting applies to `.js`, `.yml`, and `.yaml` files only; binary files are not modified.
+
+### Example
+
+```bash
+# Validate a directory that contains dot-prefixed files/folders
+node bin/maestro-validate.js ./my-test-suite/ --rename-dot-prefixed
+
+# Validate and save the renamed zip
+node bin/maestro-validate.js ./my-test-suite/ --rename-dot-prefixed --save-zip-file --output-dir ./dist
+
+# Rename dot-prefixed entries in an existing zip before validating
+node bin/maestro-validate.js ./test-suite.zip --rename-dot-prefixed
+```
 
 ---
 
