@@ -136,12 +136,14 @@ function parseArgs(argv) {
 
   console.error(`🧪 Validating ${zipFilename}...`);
   const results = await validateTestSuite(zipBuffer, zipFilename, buildParams, { renameDotPrefixed: args.renameDotPrefixed });
-  if (args.renameDotPrefixed && !stat.isDirectory()) {
-    for (const { from, to } of (results.renames || [])) {
-      console.error(`🔤  Renamed: "${from}" → "${to}"`);
-    }
-    for (const { file, from, to } of (results.refUpdates || [])) {
-      console.error(`✏️   Updated reference in "${file}": "${from}" → "${to}"`);
+  if (!stat.isDirectory()) {
+    if (args.renameDotPrefixed) {
+      for (const { from, to } of (results.renames || [])) {
+        console.error(`🔤  Renamed: "${from}" → "${to}"`);
+      }
+      for (const { file, from, to } of (results.refUpdates || [])) {
+        console.error(`✏️   Updated reference in "${file}": "${from}" → "${to}"`);
+      }
     }
   }
 
@@ -156,15 +158,16 @@ function parseArgs(argv) {
     results.phase3_dryRun,
   ].some((p) => p && p.warningCount > 0);
 
-  // --save-zip-file: persist the in-memory zip to <outputDir>/<dirname>.zip,
-  // but only when a directory was the input and validation found no errors.
-  if (args.saveZipFile && stat.isDirectory()) {
+  // --save-zip-file: persist the processed zip to <outputDir>/<name>.zip
+  // when validation found no errors. Works for both directory and zip inputs.
+  if (args.saveZipFile) {
     if (results.overallValid) {
       const outputDir = path.resolve(args.outputDir || "output");
       const outputPath = path.join(outputDir, zipFilename);
+      const bufferToSave = results.effectiveBuffer || zipBuffer;
       try {
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-        fs.writeFileSync(outputPath, zipBuffer);
+        fs.writeFileSync(outputPath, bufferToSave);
         console.error(`💾 Zip saved to: ${outputPath}`);
       } catch (e) {
         console.error(`⚠️  Could not save zip file: ${e.message}`);

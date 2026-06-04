@@ -19,9 +19,26 @@ const fs = require("fs");
 const ALLOWED_EXTENSIONS = new Set([
   ".yaml", ".yml", ".js", ".png", ".jpeg", ".jpg", ".gif", ".mp4",
 ]);
+
 const IGNORED_FILES = new Set([
-  ".DS_Store",
+  // macOS
+  '.DS_Store',
+  '._*',
+  '.Trash',
+  '__MACOSX',
+  
+  // Windows
+  'Thumbs.db',
+  'ehthumbs.db',
+  'desktop.ini',
+  '$RECYCLE.BIN',
+  
+  // Linux
+  '.directory',
+  '.Trash-*',
+  '*~'
 ]);
+
 const MAX_ZIP_SIZE_BYTES = 1 * 1024 * 1024 * 1024;        // 1 GB
 const MAX_UNARCHIVED_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const MAX_FILENAME_LENGTH = 255;
@@ -110,10 +127,6 @@ async function validateUpload(zipBuffer, zipFilename) {
 
   for (const entry of entries) {
     const entryPath = entry.name;
-
-    // Skip files in IGNORED_FILES that should be ignored entirely.
-    const basename = entryPath.split("/").pop();
-    if(IGNORED_FILES.has(basename)) continue;
 
     // Check every path segment for hidden directories/files (recursive — catches
     // hidden dirs at any nesting depth, including directory entries themselves).
@@ -382,6 +395,7 @@ async function simulateDryRun(zipBuffer, options = {}) {
 
   for (const entry of entries) {
     const segments = entry.name.split("/");
+
     const hasHidden = segments.some((s) => s.startsWith(".") && s.length > 1);
     if (hasHidden) {
       result.addWarning(
@@ -691,35 +705,40 @@ function extractClassname(filepath) {
 async function validateTestSuite(zipBuffer, zipFilename, buildParams = {}, options = {}) {
   const { renameDotPrefixed = false } = options;
 
-  // If renameDotPrefixed is requested and the input is a zip buffer (already built),
-  // rewrite the zip in-memory so all dot-prefixed entry names are renamed before validation.
+  // Rewrite the zip in-memory to:
+  //   1. Remove any entries whose path contains a segment in IGNORED_FILES.
+  //   2. If renameDotPrefixed is set, rename dot-prefixed path segments.
   let effectiveBuffer = zipBuffer;
   const renames = []; // { from, to } pairs collected during rename
-  if (renameDotPrefixed) {
-    try {
-      const srcZip = await JSZip.loadAsync(zipBuffer);
-      const newZip = new JSZip();
-      for (const [name, entry] of Object.entries(srcZip.files)) {
-        const newName = renameDotPrefixedPath(name);
-        if (newName !== name) {
-          renames.push({ from: name, to: newName });
-        }
-        if (entry.dir) {
-          newZip.folder(newName);
-        } else {
-          const content = await entry.async("nodebuffer");
-          newZip.file(newName, content);
-        }
-      }
+  try {
+    const srcZip = await JSZip.loadAsync(zipBuffer);
+    const newZip = new JSZip();
+    for (const [name, entry] of Object.entries(srcZip.files)) {
+      // Skip entries that contain an IGNORED_FILES segment anywhere in their path.
+      const segments = name.split("/");
+      if (segments.some((s) => IGNORED_FILES.has(s))) continue;
 
-      // Update path references inside .js/.yml/.yaml files to use renamed paths.
+      const newName = renameDotPrefixed ? renameDotPrefixedPath(name) : name;
+      if (renameDotPrefixed && newName !== name) {
+        renames.push({ from: name, to: newName });
+      }
+      if (entry.dir) {
+        newZip.folder(newName);
+      } else {
+        const content = await entry.async("nodebuffer");
+        newZip.file(newName, content);
+      }
+    }
+
+    // Update path references inside .js/.yml/.yaml files to use renamed paths.
+    if (renameDotPrefixed) {
       const refUpdates = await applyRenamesInTextFiles(newZip, renames);
       options._refUpdates = refUpdates;
-
-      effectiveBuffer = await newZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-    } catch (e) {
-      // If we can't rewrite, fall through — validateUpload will catch the parse error.
     }
+
+    effectiveBuffer = await newZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  } catch (e) {
+    // If we can't rewrite, fall through — validateUpload will catch the parse error.
   }
 
   const uploadResult = await validateUpload(effectiveBuffer, zipFilename);
@@ -747,6 +766,7 @@ async function validateTestSuite(zipBuffer, zipFilename, buildParams = {}, optio
       (dryRunResult ? dryRunResult.isValid : true),
     renames,
     refUpdates: options._refUpdates || [],
+    effectiveBuffer,
   };
 }
 
