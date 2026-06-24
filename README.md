@@ -12,7 +12,7 @@ This validator replicates the **exact validation pipeline** BrowserStack runs in
 |---|---|---|
 | **1. Upload** | App Uploader | Zip format, size, symlinks, path traversal, malicious filenames, extension whitelist, YAML syntax, root folder structure |
 | **2. Build API** | `/build` endpoint | `execute`, `tags`, `config`, sharding, env var format |
-| **3. Pre-Execution Scan** | BrowserStack Maestro Session Runner | Flow discovery, hidden file exclusion, non-flow YAML detection, empty flows, path resolution, `runFlow` references, classname extraction nil guard, 120s timeout |
+| **3. Pre-Execution Scan** | BrowserStack Maestro Session Runner | Flow discovery, non-flow YAML detection, empty flows, path resolution, `runFlow` references, classname extraction nil guard, 120s timeout |
 
 
 ## BrowserStack Maestro Zip Bundler
@@ -46,7 +46,7 @@ maestro-validate <zip-file|directory> [options]
 | `--output-dir <path>` | Directory for saving output files such as zip archives (default: `./output`) |
 | `--fail-on-warnings` | Exit with code `1` if any warnings are present, even when there are no errors |
 | `--save-zip-file` | When a directory is given and validation passes, save the in-memory zip to `<output-dir>/<dirname>.zip` |
-| `--rename-dot-prefixed` | Rename any file or folder whose name starts with a single `.` by replacing the leading `.` with `_` (e.g. `.hidden` → `_hidden`, `.env` → `_env`). Applied when creating, loading, or saving the zip. Useful when your source tree contains dot-prefixed names that would otherwise trigger the `HIDDEN_DIRECTORY` validation error. |
+| `--rename-dot-prefixed` | Rename any file or folder whose name starts with a single `.` by replacing the leading `.` with `_` (e.g. `.hidden` → `_hidden`, `.env` → `_env`). Applied when creating, loading, or saving the zip. |
 | `--help`, `-h` | Print help and exit |
 
 ---
@@ -138,9 +138,7 @@ When `--format json` is used, the validator writes a single JSON object to stdou
   "overallValid": true,
   "phase1_upload":  { "passed": true,  "errorCount": 0, "warningCount": 0, "issues": [] },
   "phase2_build":   { "passed": true,  "errorCount": 0, "warningCount": 0, "issues": [] },
-  "phase3_dryRun":  { "passed": true,  "errorCount": 0, "warningCount": 1, "issues": [
-    { "code": "HIDDEN_FILE_DETECTED", "severity": "warning", "message": "..." }
-  ]}
+  "phase3_dryRun":  { "passed": true,  "errorCount": 0, "warningCount": 0, "issues": [] }
 }
 ```
 
@@ -150,9 +148,7 @@ This is useful for piping results into other tools or storing them as CI artifac
 
 ## --rename-dot-prefixed option
 
-BrowserStack's upload validator rejects any file or folder whose name begins with a `.` (dot), reporting a `HIDDEN_DIRECTORY` error. This is common when a source tree contains files such as `.env`, `.flowconfig`, or folders like `.github`.
-
-The `--rename-dot-prefixed` flag tells the validator to automatically rename these entries by replacing the single leading `.` with `_` before any validation or zip-saving takes place:
+The `--rename-dot-prefixed` flag automatically renames any file or folder whose name begins with a `.` (dot) by replacing the single leading `.` with `_` before any validation or zip-saving takes place. This is useful when a source tree contains files such as `.env`, `.flowconfig`, or folders like `.github`:
 
 | Original name | Renamed to |
 |---|---|
@@ -292,7 +288,6 @@ Override the default input paths via **Env Vars** in your Bitrise app or workflo
 | `testsuite-parse-failed` | YAML parse exception during dry run |
 | `testsuite-parse-empty` | Zero flow files discovered |
 | `testsuite-no-tests-found-flowfile` | `execute` path not found |
-| `HIDDEN_FILE_DETECTED` | Hidden file in zip (warning) |
 | `NON_FLOW_FILE` | Non-flow YAML may cause Android failures (warning) |
 | `EXTRACT_CLASSNAME_NIL` | Internal runner nil bug |
 

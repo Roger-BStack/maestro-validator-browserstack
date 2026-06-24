@@ -128,20 +128,6 @@ async function validateUpload(zipBuffer, zipFilename) {
   for (const entry of entries) {
     const entryPath = entry.name;
 
-    // Check every path segment for hidden directories/files (recursive — catches
-    // hidden dirs at any nesting depth, including directory entries themselves).
-    const segments = entryPath.split("/");
-    for (const segment of segments) {
-      if (segment && segment.startsWith(".")) {
-        result.addError(
-          "HIDDEN_DIRECTORY",
-          "Invalid File Found: Hidden directory or file detected (name starts with '.')",
-          entryPath
-        );
-        break;
-      }
-    }
-
     if (entry.dir) continue;
 
     if (entry.unixPermissions && (entry.unixPermissions & 0o120000) === 0o120000) {
@@ -392,19 +378,6 @@ async function simulateDryRun(zipBuffer, options = {}) {
   const allYamlFiles = entries.filter(
     (e) => /\.(ya?ml)$/i.test(e.name) && e.name.startsWith(rootFolder + "/")
   );
-
-  for (const entry of entries) {
-    const segments = entry.name.split("/");
-
-    const hasHidden = segments.some((s) => s.startsWith(".") && s.length > 1);
-    if (hasHidden) {
-      result.addWarning(
-        "HIDDEN_FILE_DETECTED",
-        "Hidden file/folder detected — will be excluded from discovery",
-        entry.name
-      );
-    }
-  }
 
   const flowFiles = [];
   const nonFlowYamls = [];
